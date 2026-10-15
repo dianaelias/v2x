@@ -1,0 +1,13 @@
+FROM python:3.11-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV MPLBACKEND=Agg
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir commonroad-reactive-planner==2025.1
+
+WORKDIR /workspace
+ENTRYPOINT ["python", "commonroad_planner_worker.py"]
