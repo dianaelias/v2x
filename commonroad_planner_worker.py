@@ -1,3 +1,5 @@
+"""Run one CommonRoad Reactive Planner plan for each prepared CAM variant."""
+
 # pyright: reportMissingImports=false
 from __future__ import annotations
 
@@ -29,6 +31,7 @@ from visualize_encounter import footprint_clearance, rectangle_corners
 
 
 def _rear_axle_reference(case: dict[str, Any]) -> np.ndarray:
+    """Smooth and extend the recorded ego route for the planner's rear-axle frame."""
     route = case["reference_route"]
     ego = case["ego_state"]
     rear_offset = case["ego_dimensions"]["center_to_rear_axle_m"]
@@ -45,6 +48,7 @@ def _rear_axle_reference(case: dict[str, Any]) -> np.ndarray:
     if len(reference_array) < 8:
         raise ValueError("Reference route has too few future ego samples")
 
+    # Smooth annotation noise before down-sampling the route for the planner.
     smoothed = gaussian_filter1d(reference_array, sigma=5.0, axis=0, mode="nearest")
     heading = ego["heading_rad"]
     initial_rear = np.array(
@@ -76,6 +80,7 @@ def _rear_axle_reference(case: dict[str, Any]) -> np.ndarray:
 
 
 def _make_synthetic_corridor(reference: np.ndarray, width_m: float = 4.5) -> LaneletNetwork:
+    """Build a straight-through lanelet corridor around the reference route."""
     tangents = np.gradient(reference, axis=0)
     norms = np.linalg.norm(tangents, axis=1)
     if np.any(norms < 1e-6):
@@ -102,6 +107,7 @@ def _add_cam_obstacle(
     planning_horizon_steps: int,
     dt: float,
 ) -> None:
+    """Add a constant-velocity obstacle initialized from the received CAM state."""
     heading = float(decoded_state["heading_rad"])
     velocity = float(decoded_state["speed_mps"])
     position = np.array(
@@ -149,6 +155,7 @@ def _make_planner(
     plan_steps: int,
     dt: float,
 ) -> tuple[ReactivePlanner, dict[str, Any]]:
+    """Construct a planner, planning problem, corridor, and optional CAM obstacle."""
     ego = case["ego_state"]
     ego_dimensions = case["ego_dimensions"]
     scenario = Scenario(dt=dt)
@@ -215,6 +222,7 @@ def _plan_variant(
     ground_truth: dict[str, Any],
     variant_name: str,
 ) -> dict[str, Any]:
+    """Plan once and evaluate the path against both prediction and held-out truth."""
     dt = float(case["time_step_s"])
     plan_steps = round(float(case["planning_horizon_s"]) / dt)
     reference = _rear_axle_reference(case)
@@ -247,6 +255,7 @@ def _plan_variant(
     sender_width = float(case["sender_dimensions"]["width_m"])
     ego_length = float(case["ego_dimensions"]["length_m"])
     ego_width = float(case["ego_dimensions"]["width_m"])
+    # Ground truth is indexed only after planner.plan(); it is evaluation-only.
     truth_by_step = {
         round(sample["time_from_start_s"] / dt): sample
         for sample in ground_truth["sender_ground_truth_future"]
@@ -321,6 +330,7 @@ def _plan_variant(
         )
 
     accelerations = [row["acceleration_mps2"] for row in planned_rows]
+    # Acceleration differences approximate longitudinal jerk at the planner step.
     jerks = [
         (later - earlier) / dt
         for earlier, later in zip(accelerations, accelerations[1:])
@@ -354,6 +364,7 @@ def _plan_variant(
 
 
 def main() -> None:
+    """Read prepared JSON files, plan A/B/C, compare, and write result JSON."""
     parser = argparse.ArgumentParser(description="Run one CommonRoad replan per A/B/C CAM case.")
     parser.add_argument("--input", required=True)
     parser.add_argument("--ground-truth", required=True)

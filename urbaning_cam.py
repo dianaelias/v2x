@@ -1,3 +1,9 @@
+"""Create readable synthetic CAM Release 2-shaped records from UrbanING tracks.
+
+The output is a semantic JSON representation for experiments, not an ASN.1
+UPER-encoded ETSI message.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -24,17 +30,21 @@ VEHICLE_STATION_TYPES = {
 
 
 def _station_id(sequence_name: str, track_id: int) -> int:
+    """Create a stable nonzero identifier for one sequence/track pair."""
     identity = f"{sequence_name}:{track_id}".encode("utf-8")
     return zlib.crc32(identity) or 1
 
 
 def _angle_difference(first: float, second: float) -> float:
+    """Return the signed shortest rotation from the first angle to the second."""
     return math.atan2(math.sin(second - first), math.cos(second - first))
 
 
 def _central_derivative(values: list[float], timestamps: list[float], index: int) -> float:
+    """Estimate a time derivative, using one-sided differences at track ends."""
     if len(values) < 2:
         return 0.0
+    # A centered interval reduces the bias of a forward difference at interior samples.
     left = max(0, index - 1)
     right = min(len(values) - 1, index + 1)
     elapsed = timestamps[right] - timestamps[left]
@@ -44,6 +54,7 @@ def _central_derivative(values: list[float], timestamps: list[float], index: int
 
 
 def _track_kinematics(track: dict[str, Any]) -> list[dict[str, float]]:
+    """Derive speed, acceleration, yaw rate, and curvature for each track sample."""
     timestamps = [float(value) for value in track["timestamps"]]
     positions = track["positions"]
     orientations = [float(value) for value in track["orientations"]]
@@ -68,6 +79,8 @@ def _track_kinematics(track: dict[str, Any]) -> list[dict[str, float]]:
         _central_derivative(speed, timestamps, index)
         for index in range(len(timestamps))
     ]
+    # Unwrap angles before differentiating so crossing +/-pi does not look like
+    # an artificial rotation of nearly one full turn.
     unwrapped_orientations = [orientations[0]]
     for previous, current in zip(orientations, orientations[1:]):
         unwrapped_orientations.append(
@@ -110,6 +123,7 @@ def _wgs84_reference_position(
     y_m: float,
     z_m: float,
 ) -> dict[str, float]:
+    """Convert local crossing1 metre coordinates back to WGS84 coordinates."""
     origin_latitude, origin_longitude, origin_altitude = gps_origins["crossing1"]
     to_utm = Transformer.from_crs("EPSG:4326", "EPSG:32632", always_xy=True)
     to_wgs84 = Transformer.from_crs("EPSG:32632", "EPSG:4326", always_xy=True)
@@ -144,6 +158,7 @@ def track_sample_to_cam(
 
     heading_deg = (90.0 - math.degrees(heading_rad)) % 360.0
     heading_deg = 0.0 if math.isclose(heading_deg, 360.0) else heading_deg
+    # CAM generationDeltaTime is relative to the ITS epoch and wraps at 16 bits.
     timestamp_its_ms = round(
         (sample["timestamp_unix_s"] - ITS_EPOCH_UNIX_SECONDS) * 1000.0
     )
@@ -232,6 +247,7 @@ def iter_cam_records(
     sequence_name: str,
     sender_track_ids: set[int] | None = None,
 ):
+    """Yield CAM-shaped records for supported tracks, optionally filtered by ID."""
     labels = json.loads(Path(labels_path).read_text())
     tracks = labels.get("tracks")
     if not isinstance(tracks, list):
@@ -247,6 +263,7 @@ def iter_cam_records(
 
 
 def main() -> None:
+    """Select the connected sender (or all supported tracks) and write JSONL."""
     parser = argparse.ArgumentParser(
         description="Create synthetic ETSI CAM Release 2-shaped JSONL from UrbanING labels."
     )

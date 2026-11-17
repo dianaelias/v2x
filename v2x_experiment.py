@@ -1,3 +1,9 @@
+"""Compare no-V2X, ideal-CAM, and delayed/lossy CAM delivery to a minimal LDM.
+
+This script measures communication and information freshness only; it does not
+invoke a trajectory planner.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -16,6 +22,7 @@ def _load_connected_tracks(
     root: Path,
     sequence_name: str,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, int]]:
+    """Resolve the connected ego/sender IDs to tracks in the label file."""
     labels = json.loads((root / "labels" / f"{sequence_name}.json").read_text())
     connected_mapping = json.loads((root / "labels_av_track_ids.json").read_text())
     if sequence_name not in connected_mapping:
@@ -38,6 +45,7 @@ def _load_connected_tracks(
 def _front_reference_positions(
     track: dict[str, Any],
 ) -> tuple[dict[int, tuple[float, float]], dict[int, dict[str, float]]]:
+    """Index sender samples and front-bumper positions by Unix timestamp."""
     length_m = float(track["dimensions"][0][0])
     samples = _track_kinematics(track)
     positions: dict[int, tuple[float, float]] = {}
@@ -54,6 +62,7 @@ def _front_reference_positions(
 
 
 def _new_limited_random(seed: int, variant_name: str) -> random.Random:
+    """Give each variant a stable random stream derived from the run seed."""
     variant_offset = sum((index + 1) * ord(char) for index, char in enumerate(variant_name))
     return random.Random(seed + variant_offset)
 
@@ -69,6 +78,7 @@ def _run_variant(
     packet_loss_probability: float,
     seed: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Simulate one A/B/C case and summarize delivery and information freshness."""
     is_baseline = variant_name == "A_no_v2x"
     is_ideal = variant_name == "B_ideal"
     effective_delay_s = 0.0 if is_baseline or is_ideal else delay_ms / 1000.0
@@ -85,6 +95,8 @@ def _run_variant(
         raise ValueError("Connected ego and sender tracks have no common timestamps")
 
     rng = _new_limited_random(seed, variant_name)
+    # Heap entries are (receive time, source sequence number, CAM), so the
+    # earliest packet is delivered first and equal-time packets stay ordered.
     delivery_queue: list[tuple[float, int, dict[str, Any]]] = []
     latest_ldm_entry: dict[str, Any] | None = None
     rows: list[dict[str, Any]] = []
@@ -102,6 +114,7 @@ def _run_variant(
             sender_sample = sender_samples[timestamp_ms]
             sender_cam = track_sample_to_cam(sender_track, sequence_name, sender_sample)
             generated_count += 1
+            # Loss is sampled per generated message; a fixed seed makes it repeatable.
             is_dropped = rng.random() < effective_loss_probability
             if is_dropped:
                 dropped_count += 1
@@ -115,6 +128,7 @@ def _run_variant(
         delivered_this_tick = 0
         while delivery_queue and delivery_queue[0][0] <= simulation_time_s + 1e-9:
             receive_time_s, _, received_cam = heapq.heappop(delivery_queue)
+            # The minimal LDM keeps only the latest packet delivered so far.
             latest_ldm_entry = {
                 "cam": received_cam,
                 "receive_time_s": receive_time_s,
@@ -131,6 +145,7 @@ def _run_variant(
             cam_message = latest_ldm_entry["cam"]
             last_generated_time_s = cam_message["metadata"]["timestamp_unix_s"]
             last_received_time_s = latest_ldm_entry["receive_time_s"]
+            # AoI is measured from the CAM's generation time, not its receive time.
             message_age_s = max(0.0, timestamp_s - last_generated_time_s)
             generated_timestamp_ms = round(last_generated_time_s * 1000.0)
             transmitted_position = sender_reference_positions[generated_timestamp_ms]
@@ -201,6 +216,7 @@ def run_experiment(
     packet_loss_probability: float = 0.0,
     seed: int = 7,
 ) -> dict[str, Any]:
+    """Run all three variants on common timestamps and write CSV/JSON results."""
     if delay_ms < 0:
         raise ValueError("delay_ms must be non-negative")
     if not 0.0 <= packet_loss_probability <= 1.0:
@@ -265,6 +281,7 @@ def run_experiment(
 
 
 def main() -> None:
+    """Expose the communication experiment parameters on the command line."""
     parser = argparse.ArgumentParser(
         description="Compare no-V2X, ideal-CAM, and delayed-CAM LDM inputs."
     )

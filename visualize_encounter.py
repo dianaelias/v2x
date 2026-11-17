@@ -1,3 +1,5 @@
+"""Visualize two annotated vehicle tracks and measure 2D body-footprint clearance."""
+
 from __future__ import annotations
 
 import argparse
@@ -41,6 +43,7 @@ def _subtract(
     first: tuple[float, float],
     second: tuple[float, float],
 ) -> tuple[float, float]:
+    """Subtract 2D coordinates, returning the vector from second to first."""
     return first[0] - second[0], first[1] - second[1]
 
 
@@ -49,6 +52,7 @@ def _point_segment_distance(
     start: tuple[float, float],
     end: tuple[float, float],
 ) -> float:
+    """Return the shortest distance from a point to a finite line segment."""
     segment = _subtract(end, start)
     length_squared = segment[0] ** 2 + segment[1] ** 2
     if length_squared == 0.0:
@@ -64,9 +68,11 @@ def _polygons_overlap(
     first: list[tuple[float, float]],
     second: list[tuple[float, float]],
 ) -> bool:
+    """Use the separating-axis theorem to test convex polygon overlap."""
     for polygon in (first, second):
         for start, end in zip(polygon, polygon[1:] + polygon[:1]):
             edge = _subtract(end, start)
+            # A gap on any edge-normal axis proves the rectangles are separate.
             axis = (-edge[1], edge[0])
             first_projection = [point[0] * axis[0] + point[1] * axis[1] for point in first]
             second_projection = [point[0] * axis[0] + point[1] * axis[1] for point in second]
@@ -106,6 +112,7 @@ def _track_rows(
     ego_track: dict[str, Any],
     sender_track: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    """Join tracks at common timestamps and calculate their footprint gaps."""
     ego_samples = {
         round(float(timestamp) * 1000.0): (position, float(heading))
         for timestamp, position, heading in zip(
@@ -172,6 +179,7 @@ def _plot_encounter(
     output_path: Path,
     caution_distance_m: float,
 ) -> None:
+    """Write a trajectory plot and a time series of center/footprint distances."""
     minimum = min(rows, key=lambda row: row["footprint_clearance_m"])
     minimum_time = minimum["time_s"]
     fig, (map_axis, distance_axis) = plt.subplots(
@@ -270,6 +278,7 @@ def analyze_encounter(
     output_folder: str | Path,
     caution_distance_m: float = 2.0,
 ) -> dict[str, Any]:
+    """Analyze the connected tracks and save the plot, per-tick CSV, and summary."""
     root = Path(root_folder)
     output = Path(output_folder)
     labels = json.loads((root / "labels" / f"{sequence_name}.json").read_text())
@@ -334,6 +343,7 @@ def analyze_encounter(
 
 
 def main() -> None:
+    """Parse input/output paths and run the encounter analysis."""
     parser = argparse.ArgumentParser(
         description="Visualize connected vehicle tracks and calculate 2D body clearance."
     )

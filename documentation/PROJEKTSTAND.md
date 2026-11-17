@@ -2,6 +2,11 @@
 
 Dieses Dokument hält fest, was im Projekt bisher eingerichtet wurde, wie die ersten Daten-Reader funktionieren und was SUMO, CARLA und Lanelets bedeuten.
 
+Für den Einstieg in die gesamte Codebasis siehe außerdem die
+[technische Dokumentation](./TECHNISCHE_DOKUMENTATION.md). Die aus dem Exposé
+abgeleiteten, mit dem aktuellen Implementierungsstand abgeglichenen Ziele stehen
+in der [technischen Anforderungsspezifikation](./TECHNISCHE_ANFORDERUNGEN.md).
+
 ## Kurzfassung
 
 - Heruntergeladen wurde eine einzelne UrbanING-V2X-Sequenz: `20241126_0017_crossing1_00`.
@@ -11,10 +16,27 @@ Dieses Dokument hält fest, was im Projekt bisher eingerichtet wurde, wie die er
 - `urbaning_cam.py` erzeugt lesbare synthetische CAM-Release-2-Datensätze aus den annotierten Objekttracks.
 - `v2x_experiment.py` vergleicht keine V2X-Nachrichten, ideale CAMs und verzögerte/verlorene CAMs bis zur LDM-Eingabe.
 - `run_commonroad_planner.py` und `commonroad_planner_worker.py` leiten drei empfangene CAM-Varianten an den offiziellen CommonRoad Reactive Planner weiter; der Worker läuft isoliert in Docker/Python 3.11.
-- `commonroad_scenario_experiment.py` testet zusätzlich zyklisches Replanning auf einer offiziellen CommonRoad-T-Kreuzung mit idealen beziehungsweise veralteten CAM-Prädiktionen.
-- Die CommonRoad-T-Kreuzung ist ein kontrollierter Planner-Testfall, aber noch kein Latenz-Wirkungsnachweis: In den bisher geprüften Läufen blieben A/B/C-Trajektorien identisch.
+- `commonroad_scenario_experiment.py` testet zyklisches Replanning auf einer CommonRoad-T-Kreuzung mit idealen CAMs bzw. verzögerter, optional verlustbehafteter Zustellung und Konstantgeschwindigkeits-Extrapolation.
+- Die CommonRoad-T-Kreuzung ist ein kontrollierter Planner-Testfall, aber noch kein belastbarer Wirkungsnachweis: frühere Läufe blieben identisch; der aktuelle Queue-Test zeigt Verzögerungs- und seedabhängige Paketverlust-Effekte.
+- Die abgestimmte Neuplanungsrate ist 100 ms (10 Hz); der T-Kreuzungs-Runner plant pro 0,1-s-Schritt neu. Ältere Ergebnisdateien können noch aus dem vorherigen 300-ms-Takt stammen; vor dem Vergleich ist ihr gespeichertes `replanning_period_s` zu prüfen. Die aktuellen Szenario-533-Läufe sind mit 100 ms erzeugt.
 - Das erzeugte Karten-JSON ist noch kein SUMO-Netz. Eine Umwandlung in SUMOs Netzformat steht noch aus.
-- Die CAM-Datei ist noch kein ASN.1-UPER-Funkpaket; eine Latenzqueue und die Anbindung an eine LDM sind noch nicht implementiert.
+- Die synthetische CAM-Ausgabe ist kein ASN.1-UPER-Funkpaket. Der CommonRoad-Runner hat nun eine einfache CAM-Queue für Latenz und optionalen Paketverlust; der separate UrbanING-Kommunikationsversuch ist weiterhin nicht an den zyklischen Planner angebunden.
+
+## Abgestimmtes Forschungsdesign
+
+- **Planer:** CommonRoad Reactive Planner 2025.1 ist als Werling-Frenét-Planer festgelegt.
+- **Daten:** UrbanING-V2X ist die primäre realitätsnahe Grundlage; native CommonRoad-Szenarien ergänzen sie für kontrollierte Konflikte. Reproduzierbares Startzeit-Tuning ist bei zu ruhigen Realdaten möglich.
+- **Variante A:** Der Akteur bleibt in der Ground Truth, wird aber erst lokal in die Planner-Szene aufgenommen, wenn sein Abstand zum abgeleiteten Konfliktpunkt höchstens 15 m beträgt. Diese angenommene Sichtfreigabe bleibt aktiv. Das ist eine dokumentierte Näherung, keine echte Gebäude-/Sichtlinienberechnung; die XML enthält keine Gebäudeflächen. Die TTC-Alternative `TTC < 1,5 s` ist nicht gewählt.
+- **CAM:** Ein synthetisches Python-Dict/JSON mit den relevanten ETSI-CAM-Feldern reicht für den Planner-Versuch. Binäre ASN.1-UPER-Kodierung ist nicht vorgesehen.
+- **Hauptmatrix für Variante C:** 5 Latenzen (50, 100, 200, 300, 500 ms) × 4 Verlustraten (0 %, 5 %, 10 %, 20 %) × 5 Konfliktszenarien × 5 Seeds = **500 Läufe**. A/B-Referenzläufe kommen zusätzlich hinzu und sind in dieser Zahl nicht enthalten.
+- **Zusatzreihe:** Jitter ist als separate Reihe mit Normalverteilung `μ = jeweilige Latenz`, `σ = 20 ms` vorgesehen; sie gehört nicht zu den 500 Läufen.
+- **Metriken:** Pläne sollen an gleichen absoluten Zukunftszeitpunkten in Frenét-`Δs`/`Δd` verglichen werden; dazu kommen Jerk, minimaler 2D-Footprint-Abstand und TTC am Konfliktpunkt. Für die LDM ist noch zwischen Sample-and-Hold und linearer Extrapolation bis zum vorgeschlagenen 1-s-Timeout zu entscheiden.
+
+Die Festlegungen und ihr Umsetzungsstatus stehen in der
+[Anforderungsspezifikation](./TECHNISCHE_ANFORDERUNGEN.md). Die 500-Läufe-
+Matrix ist noch nicht als automatisierter Batch-Runner implementiert. Die
+CommonRoad-Ausführung muss außerdem 50-ms-Latenz trotz 100-ms-Zeitschritt
+korrekt unterstützen, bevor diese Stufe ausgewertet wird.
 
 ## Was liegt wo?
 
@@ -199,11 +221,15 @@ Messunsicherheiten liegen nicht in diesen Ground-Truth-Annotations vor und werde
 
 Eine Plausibilitätsprüfung ergab einen Geschwindigkeitssprung bei Track 150: Die annotierte Position springt über ein 100-ms-Intervall etwa 8 m und im folgenden Schritt wieder zurück. Der abgeleitete Wert wird nicht gekappt, sondern im Record mit `derived_speed_above_55_mps` als Qualitätswarnung markiert. Die 55-m/s-Grenze ist hier nur ein Screening-Hinweis, kein ETSI-Grenzwert.
 
-Noch nicht umgesetzt sind künstliche Verzögerung/Queue, Paketverlust oder Scheduling, Empfängerzustand und Ablage empfangener CAMs in einer Local Dynamic Map (LDM). Erst diese Teile machen aus der CAM-Datengenerierung ein Latenzexperiment. Für reproduzierbare Latenztests müssen wir außerdem festlegen, was die Sendezeit, Empfangszeit und Ground-Truth-Zeit eines CAM-Samples jeweils bedeuten.
+Dieses CAM-Generierungsskript allein setzt keine Verzögerungsqueue, Paketverlust, Scheduling oder Empfänger-LDM um. Dafür gibt es den separaten Kommunikationsprototyp `v2x_experiment.py`; dieser ist noch nicht mit dem zyklischen Planner verbunden. Für das vollständige Experiment müssen Sendezeit, Empfangszeit und Ground-Truth-Zeit eines CAM-Samples gemeinsam eindeutig behandelt werden.
 
-## Erster A/B/C-Kommunikationsversuch
+## Erster A/B/C-Kommunikationsversuch (Kommunikationsprototyp)
 
 `v2x_experiment.py` verbindet die annotierten Rollen mit einer einfachen diskreten Ereignissimulation. `vehicle2`/Track 115 erzeugt pro Ground-Truth-Tick eine CAM; `vehicle1`/Track 116 ist der Ego-Empfänger. Die Queue hält CAMs bis zur konfigurierten Empfangszeit zurück. Bei Ankunft wird die neueste Nachricht in einer minimalen LDM gespeichert. Der Versuch läuft auf den gemeinsamen 10-Hz-Zeitpunkten der Annotationen.
+
+Die folgenden Varianten beschreiben nur den frühen Kommunikations-/LDM-
+Prototyp. Insbesondere ist dessen `A_no_v2x` mit leerer LDM **nicht** die
+abgestimmte Masterarbeits-Baseline A (lokale Sensorik mit Sichtlinienfreigabe).
 
 Varianten:
 
@@ -305,25 +331,77 @@ Die Datensatz-Lizenz und die Zitierhinweise aus dem UrbanING-Repository sind bei
 
 ## CommonRoad-T-Kreuzung: kontrollierter Planner-Test
 
-Für einen ersten geschlossenen Replan-Test liegen in `commonroad_scenarios/` die offizielle Planner-Beispielszene `ZAM_Tjunction-1_42_T-1.xml` und ihre passende YAML-Konfiguration. Die Szene enthält 12 Lanelets, ein Planning Problem (ID 60000), fünf dynamische Fahrzeuge und einen Zeitschritt von 0,1 s. Sie ist als synthetische CommonRoad-Benchmarkszene markiert (städtische T-Kreuzung, Linksabbiegen, Gegenverkehr); ihre Koordinaten haben keinen Bezug zu den UrbanING-Koordinaten.
+In `commonroad_scenarios/` liegt die ursprüngliche Planner-Beispielszene
+`ZAM_Tjunction-1_42_T-1.xml` mit ihrer YAML-Konfiguration. Sie hat ein
+Planning Problem (ID 60000), fünf dynamische Fahrzeuge und `dt=0,1 s`.
+Zusätzlich wurde eine nicht redundante Szene aus dem Seminararbeits-Repository
+importiert: `commonroad_scenarios/imported/ZAM_Tjunction-1_533_T-1.xml`.
+Die Datei wurde unverändert kopiert (SHA-256
+`5ec8ef3f6094962e89e1a84f9acaf706911278285158b90286ef4056e3904ad0`); die
+BSD-3-Clause-`LICENSE.txt` liegt direkt daneben. CommonRoad empfiehlt für
+seine Benchmarks die Referenz von Althoff, Koschi und Manzinger (2017).
 
-Der neue Runner baut keine künstliche Straße, sondern benutzt die CommonRoad-Karte und die dort aufgezeichneten Ego-/Akteur-Trajektorien. Für einen gewählten Dynamic-Obstacle-Identifier werden CAM-Zustände aus dem jeweiligen Szenario-Track abgeleitet; die Planner-Prognose nimmt konstante Geschwindigkeit und Richtung ab dem empfangenen Zustand an. Die Varianten sind: A ohne diesen kooperativ wahrgenommenen Akteur, B mit aktuellem CAM-Zustand und C mit CAM-Zustand aus der Vergangenheit. Nicht ausgewählter Verkehr bleibt in allen Varianten im Szenario. Die tatsächliche Akteurstrajektorie wird nur nach dem Planen zur Clearance-Auswertung verwendet. Das Replanning erfolgt alle drei 0,1-s-Schritte mit 2 s Planungshorizont.
+Der geschlossene Runner nutzt die CommonRoad-Karte und Szenariospuren. Er
+plant alle 100 ms neu, mit einem 2-s-Planungshorizont. B ersetzt den
+gewählten Akteur durch den aktuellen CAM-Zustand. C erzeugt pro Szenariotakt
+ein CAM, legt es um die konfigurierte Latenz in eine Queue und kann es mit
+`--packet-loss` reproduzierbar verwerfen. Die LDM hält den letzten
+zugestellten Zustand und extrapoliert mit konstanter Geschwindigkeit und
+Richtung. Nicht ausgewählter Verkehr bleibt in der Szene. Die wirkliche
+Akteurspur wird nur für die nachträgliche Clearance-Auswertung verwendet. Der
+Parameter `--actor-time-offset-ms`
+verschiebt die ausgewählte aufgezeichnete Spur relativ zu Ego: negative Werte
+ziehen sie vor, positive Werte verzögern sie. Der Wert muss auf dem 100-ms-
+Raster liegen. Der Versatz ändert keine Maße oder Sicherheitsränder.
 
-Beispiel für einen vollständigen Lauf gegen Dynamic Obstacle 1 mit 500 ms CAM-Alter:
+**Konflikt-Tuning-Test:** Für Szenario 533, Obstacle 1 wurde die Akteurspur um
+3,6 s vorgezogen (`--actor-time-offset-ms -3600`). Der Konfliktpunkt ist der
+erste Schnittpunkt zwischen Ego-Referenzlinie und Akteur-Mittellinie:
+`(16,73 m; 2,74 m)`. Bei `d_sight=15 m` wird der Akteur in A ab 4,7 s
+lokal sichtbar; ohne Zeitversatz ab 8,3 s. Danach bleibt die Sichtbarkeit
+aktiv. Alle Varianten absolvierten 147 Schritte und Planungen. Bei 200 ms
+überlappten A/B/C nicht mit Ground Truth; der minimale Abstand war 16,6 mm
+für A und B sowie 8,7 mm für C. A und B hatten identische Trajektorien;
+B/C wichen 3,4 cm im Mittel und 12,1 cm maximal ab. Bei 500 ms betrug die
+B/C-Abweichung 41,8 cm im Mittel und 1,17 m maximal; der minimale Abstand
+lag bei 9,6 mm. Der Sicherheitsrand blieb unverändert.
 
-```zsh
-docker run --rm --platform=linux/amd64 \\
-	--entrypoint python \\
-	-v "$PWD:/workspace" -w /workspace \\
-	urbaning-commonroad-planner:2025.1 \\
-	commonroad_scenario_experiment.py \\
-	--scenario /workspace/commonroad_scenarios/ZAM_Tjunction-1_42_T-1.xml \\
-	--configuration /workspace/commonroad_scenarios/ZAM_Tjunction-1_42_T-1.yaml \\
-	--planning-problem-id 60000 --obstacle-id 1 \\
-	--delay-ms 500 --simulation-steps 147 \\
-	--output /workspace/sumo_input/commonroad_tjunction_actor1_500ms.json
-```
+Reproduzierbare Ergebnisdateien:
+- `sumo_input/commonroad_tjunction_533_actor1_baseline.json` (ohne Zeitversatz,
+  200 ms)
+- `sumo_input/commonroad_tjunction_533_actor1_advance_3600ms.json` (200 ms)
+- `sumo_input/commonroad_tjunction_533_actor1_advance_3600ms_delay500ms.json`
+  (500 ms)
+- `sumo_input/commonroad_tjunction_533_actor1_advance_3600ms_loss20_seed7.json`
+- `sumo_input/commonroad_tjunction_533_actor1_advance_3600ms_loss20_seed8.json`
+- `sumo_input/commonroad_tjunction_533_actor1_advance_3600ms_loss0_seed7.json`
 
-Der Baseline-Smoke-Test mit der unveränderten Planner-API erzeugte 90 Kandidaten und eine zulässige 21-Schritt-Trajektorie. Der geschlossene Runner lief für alle fünf Dynamic-Obstacle-IDs bis zu 147 Schritte. Für Obstacle 1 blieben A/B/C bei getesteten CAM-Altern von 500 ms, 2 s und 5 s numerisch identisch; der minimale Ego-zu-Actor-Fußabstand betrug in diesen Varianten 2,70 m. Für die getesteten Obstacle-IDs 2, 4 und 5 bei 500 ms blieben die Bahnen ebenfalls identisch (minimale Abstände 3,69 m, 2,06 m beziehungsweise 1,59 m).
+**20-%-Paketverlusttest:** Je Lauf wurden zwei vor t=0 erzeugte Warm-up-CAMs
+zusätzlich in die Kommunikationsqueue geladen. Damit gab es 114 generierte
+CAMs je Lauf. Bei Seed 7 wurden 26 (22,8 %) verworfen; bei Seed 8 28 (24,6 %).
+Alle Varianten planten jeweils 147 Schritte. Gegen den 0-%-Kontrolllauf stieg
+die B/C-Positionsabweichung bei Seed 7 von 3,4 cm im Mittel/12,1 cm maximal
+auf 6,7 cm/24,9 cm. Bei Seed 8 war die C-Trajektorie trotz 20 % konfiguriertem
+Verlust identisch zum 0-%-Lauf. C erreichte im Seed-7-Lauf 9,6 mm minimalen
+Ground-Truth-Abstand (B: 16,6 mm), ohne diskrete Überlappungen. Die AoI von C
+lag im Mittel bei 604 ms (Seed 7) bzw. 606 ms (Seed 8), maximal bei 3,5 s.
+Eine Wiederholung mit Seed 7 reproduzierte Trajektorien, Drop-Zahlen und AoI
+exakt.
 
-Das negative Resultat sagt nur, dass die diskrete Kandidatenauswahl dieses Planner-Setups in diesen Läufen nicht auf die geänderte Hindernisprognose reagierte. Es bedeutet weder, dass CAM-Latenz allgemein wirkungslos ist, noch dass die Szene sicher ist. A modelliert fehlende kooperative Wahrnehmung dieses einen Akteurs und keine alternative lokale Sensorwahrnehmung. Die Prädiktion ist synthetisch, Paketverlust ist in diesem Runner noch nicht enthalten, und eine kritische Latenzgrenze kann erst aus einer breiten, wiederholten Parametervariation mit nachvollziehbarer Interaktion abgeleitet werden.
+Der Konflikttest ist ein Funktionsnachweis für Startzeit-Tuning, aber kein
+belastbares Forschungsergebnis. A verwendet eine Distanzschwelle als
+Sichtlinien-Näherung; beide CommonRoad-Szenarien besitzen keine statischen
+Hindernisse/Gebäude, aus denen sich physische Verdeckung berechnen ließe.
+Millimeter-Clearance ist keine ausreichende Sicherheitsmarge.
+Die 20-%-Testreihe zeigt eine B/C-Abweichung, ist aber mit zwei Seeds und
+einem Konfliktfall kein belastbarer Befund. Ein LDM-Timeout, der NLoS-Nachweis
+und ein Pool von fünf begründeten Konfliktszenarien fehlen weiterhin.
+
+In früheren Läufen mit der ursprünglichen Szene 42 blieben A/B/C bei sieben
+getesteten Akteur-/Latenzkombinationen numerisch identisch; der engste
+Ground-Truth-Footprint-Abstand lag bei etwa 1,60 m. Ein ausschließlich
+diagnostischer Sensitivitätstest mit 2 m dynamischem Sicherheitsrand (kein
+empfohlener Forschungswert) ließ A bis zum Ende planen, B/C scheiterten nach
+53 Replans. Das Ergebnis belegt nur, dass die Hindernisrepräsentation
+Plannerentscheidungen beeinflussen kann; Sicherheitsparameter dürfen nicht
+allein zur sichtbaren Erzeugung von Variantenunterschieden gewählt werden.

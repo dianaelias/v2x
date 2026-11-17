@@ -1,9 +1,12 @@
+"""Download one UrbanING-V2X sequence or the complete dataset."""
+
 import argparse
 
 from urbaning.data import download_dataset, download_one_sequence
 
 
 def main():
+    """Parse download options and delegate archive handling to the UrbanING SDK."""
     parser = argparse.ArgumentParser(description="Download the UrbanING-V2X dataset.")
     parser.add_argument(
         "--all",

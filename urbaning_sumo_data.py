@@ -1,3 +1,5 @@
+"""Export UrbanING vehicle poses and Lanelet2 boundaries as readable files."""
+
 from __future__ import annotations
 
 import argparse
@@ -36,10 +38,12 @@ def load_vehicle_trajectory(
         if len(transform) != 4 or any(len(row) != 4 for row in transform):
             raise ValueError(f"Expected a 4x4 gTv matrix in {state_file}")
 
+        # The upper-left 2x2 part of the rigid transform stores planar rotation.
         heading_rad = math.atan2(transform[1][0], transform[0][0])
         trajectory.append(
             {
                 "timestamp_ms": timestamp_ms,
+                # Use elapsed time so each exported sequence starts at t = 0.
                 "time_s": (timestamp_ms - start_ms) / 1000.0,
                 "x_m": float(transform[0][3]),
                 "y_m": float(transform[1][3]),
@@ -80,6 +84,7 @@ def load_lanelet_map(osm_path: str | Path) -> dict[str, Any]:
     for node in osm_root.findall("node"):
         if "lat" not in node.attrib or "lon" not in node.attrib:
             continue
+        # Put map and vehicle coordinates into the same local metre frame.
         x, y = project.transform(float(node.attrib["lon"]), float(node.attrib["lat"]))
         nodes[node.attrib["id"]] = (x - origin_x, y - origin_y)
 
@@ -97,6 +102,7 @@ def load_lanelet_map(osm_path: str | Path) -> dict[str, Any]:
         if tags.get("type") != "lanelet":
             continue
 
+        # Lanelet relations reference their left/right boundary ways by ID.
         boundary_ids = {
             member.attrib["role"]: member.attrib["ref"]
             for member in relation.findall("member")
@@ -122,6 +128,7 @@ def load_lanelet_map(osm_path: str | Path) -> dict[str, Any]:
 
 
 def main() -> None:
+    """Export both vehicle trajectories and the shared Lanelet2 map."""
     parser = argparse.ArgumentParser(
         description="Export UrbanIng-V2X vehicle trajectories and Lanelet2 map data."
     )

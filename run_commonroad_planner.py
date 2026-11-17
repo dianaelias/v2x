@@ -1,3 +1,5 @@
+"""Prepare one UrbanING A/B/C planner case and run it inside the Docker image."""
+
 from __future__ import annotations
 
 import argparse
@@ -21,6 +23,7 @@ def _sample_at_or_before(
     samples: list[dict[str, float]],
     timestamp_s: float,
 ) -> dict[str, float]:
+    """Return the most recent track sample not newer than the requested time."""
     candidates = [sample for sample in samples if sample["timestamp_unix_s"] <= timestamp_s + 1e-9]
     if not candidates:
         raise ValueError(f"No annotation sample exists at or before {timestamp_s}")
@@ -31,6 +34,7 @@ def _decode_cam_to_local_state(
     cam_record: dict[str, Any],
     map_origin_xy: tuple[float, float],
 ) -> dict[str, Any]:
+    """Convert a synthetic CAM reference position back to the planner's local frame."""
     parameters = cam_record["cam"]["cam"]["camParameters"]
     reference = parameters["basicContainer"]["referencePosition"]
     high_frequency = parameters["highFrequencyContainer"]["basicVehicleContainerHighFrequency"]
@@ -62,6 +66,7 @@ def prepare_case(
     delay_ms: float,
     output_folder: str | Path,
 ) -> tuple[Path, Path]:
+    """Write planner inputs separately from future ground truth used for scoring."""
     root = Path(root_folder)
     output = Path(output_folder)
     output.mkdir(parents=True, exist_ok=True)
@@ -93,6 +98,7 @@ def prepare_case(
         "vehicle2": sender_track,
     }
     snapshots: dict[str, Any] = {}
+    # Keep one recorded ego route for all variants; vary only the sender snapshot.
     for variant, sample in (
         ("A_no_v2x", None),
         ("B_ideal", sender_sample),
@@ -165,6 +171,7 @@ def prepare_case(
             "The lanelet is a synthetic corridor built around the recorded ego reference, not the UrbanING HD map.",
         ],
     }
+    # The worker receives this file only for post-plan evaluation, not planning.
     evaluator_truth = {
         "sender_ground_truth_future": truth_sender,
         "ego_ground_truth_future": reference,
@@ -184,6 +191,7 @@ def run_container(
     output_folder: Path,
     build_image: bool,
 ) -> None:
+    """Build the pinned planner image if requested, then run its worker."""
     if shutil.which("docker") is None:
         raise RuntimeError("Docker is required; install/start Docker Desktop and retry")
 
@@ -228,6 +236,7 @@ def run_container(
 
 
 def main() -> None:
+    """Prepare a case and invoke Docker with paths mounted from the repository."""
     parser = argparse.ArgumentParser(
         description="Run one CommonRoad replanning step for A/B/C CAM inputs via Docker."
     )
